@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  
+  
+  <title>[部分翻译] 通过 PTE 欺骗以达到近乎完美的注入效果 | Hexo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <meta name="description" content="Making The Perfect Injector: Abusing Windows Address Sanitization And CoW 我的目标是在这篇博文结尾的时候，制作出一个与众不同的注入器：让你的dll无法被用户模式的调试器调试，让你的内存页对NtQueryVirtualMemory与NtReadVirtualMemory不可见，最后，你的执行代码在目标进程甚至不会有一个句柄。在">
+<meta property="og:type" content="article">
+<meta property="og:title" content="[部分翻译] 通过 PTE 欺骗以达到近乎完美的注入效果">
+<meta property="og:url" content="http://example.com/2020/05/02/The-Perfect-Injector/index.html">
+<meta property="og:site_name" content="Hexo">
+<meta property="og:description" content="Making The Perfect Injector: Abusing Windows Address Sanitization And CoW 我的目标是在这篇博文结尾的时候，制作出一个与众不同的注入器：让你的dll无法被用户模式的调试器调试，让你的内存页对NtQueryVirtualMemory与NtReadVirtualMemory不可见，最后，你的执行代码在目标进程甚至不会有一个句柄。在">
+<meta property="og:locale" content="en_US">
+<meta property="article:published_time" content="2020-05-02T09:09:31.000Z">
+<meta property="article:modified_time" content="2020-05-02T11:37:31.233Z">
+<meta property="article:author" content="John Doe">
+<meta property="article:tag" content="内核">
+<meta property="article:tag" content="译">
+<meta name="twitter:card" content="summary">
+  
+    <link rel="alternate" href="/atom.xml" title="Hexo" type="application/atom+xml">
+  
+  
+    <link rel="shortcut icon" href="/favicon.png">
+  
+  
+    
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/typeface-source-code-pro@0.0.71/index.min.css">
+
+  
+  
+<link rel="stylesheet" href="/css/style.css">
+
+  
+    
+<link rel="stylesheet" href="/fancybox/jquery.fancybox.min.css">
+
+  
+<meta name="generator" content="Hexo 5.3.0"></head>
+
+<body>
+  <div id="container">
+    <div id="wrap">
+      <header id="header">
+  <div id="banner"></div>
+  <div id="header-outer" class="outer">
+    <div id="header-title" class="inner">
+      <h1 id="logo-wrap">
+        <a href="/" id="logo">Hexo</a>
+      </h1>
+      
+    </div>
+    <div id="header-inner" class="inner">
+      <nav id="main-nav">
+        <a id="main-nav-toggle" class="nav-icon"></a>
+        
+          <a class="main-nav-link" href="/">Home</a>
+        
+          <a class="main-nav-link" href="/archives">Archives</a>
+        
+      </nav>
+      <nav id="sub-nav">
+        
+          <a id="nav-rss-link" class="nav-icon" href="/atom.xml" title="RSS Feed"></a>
+        
+        <a id="nav-search-btn" class="nav-icon" title="Search"></a>
+      </nav>
+      <div id="search-form-wrap">
+        <form action="//google.com/search" method="get" accept-charset="UTF-8" class="search-form"><input type="search" name="q" class="search-form-input" placeholder="Search"><button type="submit" class="search-form-submit">&#xF002;</button><input type="hidden" name="sitesearch" value="http://example.com"></form>
+      </div>
+    </div>
+  </div>
+</header>
+
+      <div class="outer">
+        <section id="main"><article id="post-The-Perfect-Injector" class="h-entry article article-type-post" itemprop="blogPost" itemscope itemtype="https://schema.org/BlogPosting">
+  <div class="article-meta">
+    <a href="/2020/05/02/The-Perfect-Injector/" class="article-date">
+  <time class="dt-published" datetime="2020-05-02T09:09:31.000Z" itemprop="datePublished">2020-05-02</time>
+</a>
+    
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Win%E5%86%85%E6%A0%B8/">Win内核</a>
+  </div>
+
+  </div>
+  <div class="article-inner">
+    
+    
+      <header class="article-header">
+        
+  
+    <h1 class="p-name article-title" itemprop="headline name">
+      [部分翻译] 通过 PTE 欺骗以达到近乎完美的注入效果
+    </h1>
+  
+
+      </header>
+    
+    <div class="e-content article-entry" itemprop="articleBody">
+      
+        <p><a target="_blank" rel="noopener" href="https://blog.can.ac/2018/05/02/making-the-perfect-injector-abusing-windows-address-sanitization-and-cow/">Making The Perfect Injector: Abusing Windows Address Sanitization And CoW</a></p>
+<p>我的目标是在这篇博文结尾的时候，制作出一个与众不同的注入器：让你的dll无法被用户模式的调试器调试，让你的内存页对<code>NtQueryVirtualMemory</code>与<code>NtReadVirtualMemory</code>不可见，最后，你的执行代码在目标进程甚至不会有一个句柄。在实现这些操作的同时，我希望它不会触发 patchguard, 并且在目标进程运行时没有驱动运行。</p>
+<p>这个目标看起来似乎很蠢，但其实它非常简单，因为windows会帮助我们。</p>
+<p>（源码可以在博文底部找到）</p>
+<h2 id="0x1-利用Windows地址过滤"><a href="#0x1-利用Windows地址过滤" class="headerlink" title="0x1:利用Windows地址过滤"></a>0x1:利用Windows地址过滤</h2><p>当我们把ntoskrnl.exe拖入IDA的时候，我们可以注意一个地址检查</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">__int64 __usercall MiReadWriteVirtualMemory@&lt;rax&gt;(ULONG_PTR BugCheckParameter1@&lt;rcx&gt;, <span class="keyword">unsigned</span> __int64 a2@&lt;rdx&gt;, <span class="keyword">unsigned</span> __int64 a3@&lt;r8&gt;, __int64 a4@&lt;r9&gt;, __int64 a5, <span class="keyword">int</span> a6)</span><br><span class="line">&#123;</span><br><span class="line">  ...</span><br><span class="line">    <span class="keyword">if</span> ( v10 &lt; a3 || v9 &gt; <span class="number">0x7FFFFFFEFFFF</span>i64 || v10 &gt; <span class="number">0x7FFFFFFEFFFF</span>i64 )</span><br><span class="line">      <span class="keyword">return</span> <span class="number">0xC0000005</span>i64;</span><br><span class="line">  ...</span><br><span class="line">&#125;</span><br><span class="line"><span class="function">__int64 __fastcall <span class="title">MmQueryVirtualMemory</span><span class="params">(__int64 a1, <span class="keyword">unsigned</span> __int64 a2, __int64 a3, <span class="keyword">unsigned</span> __int64 a4, <span class="keyword">unsigned</span> __int64 a5, <span class="keyword">unsigned</span> __int64 *a6)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">  ...</span><br><span class="line">  <span class="keyword">if</span> ( v12 &gt; <span class="number">0x7FFFFFFEFFFF</span>i64 )</span><br><span class="line">    <span class="keyword">return</span> <span class="number">0xC000000D</span>i64;</span><br><span class="line">  ...</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>有趣的是，<strong>操作系统使用硬编码的方式来确保内核内存不会泄露，而这个方式并非CPU用来检查地址是否可以被用户层访问的方式</strong>。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">pragma</span> pack(push, 1)</span></span><br><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">union</span> <span class="title">CR3_</span></span></span><br><span class="line"><span class="class">&#123;</span></span><br><span class="line">  <span class="keyword">uint64_t</span> value;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span></span></span><br><span class="line"><span class="class">  &#123;</span></span><br><span class="line">    <span class="keyword">uint64_t</span> ignored_1 : <span class="number">3</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> write_through : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> cache_disable : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> ignored_2 : <span class="number">7</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> pml4_p : <span class="number">40</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> reserved : <span class="number">12</span>;</span><br><span class="line">  &#125;;</span><br><span class="line">&#125; PTE_CR3;</span><br><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">union</span> <span class="title">VIRT_ADDR_</span></span></span><br><span class="line"><span class="class">&#123;</span></span><br><span class="line">  <span class="keyword">uint64_t</span> value;</span><br><span class="line">  <span class="keyword">void</span> *pointer;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span></span></span><br><span class="line"><span class="class">  &#123;</span></span><br><span class="line">    <span class="keyword">uint64_t</span> offset : <span class="number">12</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> pt_index : <span class="number">9</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> pd_index : <span class="number">9</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> pdpt_index : <span class="number">9</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> pml4_index : <span class="number">9</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> reserved : <span class="number">16</span>;</span><br><span class="line">  &#125;;</span><br><span class="line">&#125; VIRT_ADDR;</span><br><span class="line"><span class="keyword">typedef</span> <span class="keyword">uint64_t</span> PHYS_ADDR;</span><br><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">union</span> <span class="title">PML4E_</span></span></span><br><span class="line"><span class="class">&#123;</span></span><br><span class="line">  <span class="keyword">uint64_t</span> value;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span></span></span><br><span class="line"><span class="class">  &#123;</span></span><br><span class="line">    <span class="keyword">uint64_t</span> present : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> rw : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> user : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> write_through : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> cache_disable : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> accessed : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> ignored_1 : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> reserved_1 : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> ignored_2 : <span class="number">4</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> pdpt_p : <span class="number">40</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> ignored_3 : <span class="number">11</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> xd : <span class="number">1</span>;</span><br><span class="line">  &#125;;</span><br><span class="line">&#125; PML4E;</span><br><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">union</span> <span class="title">PDPTE_</span></span></span><br><span class="line"><span class="class">&#123;</span></span><br><span class="line">  <span class="keyword">uint64_t</span> value;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span></span></span><br><span class="line"><span class="class">  &#123;</span></span><br><span class="line">    <span class="keyword">uint64_t</span> present : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> rw : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> user : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> write_through : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> cache_disable : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> accessed : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> dirty : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> page_size : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> ignored_2 : <span class="number">4</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> pd_p : <span class="number">40</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> ignored_3 : <span class="number">11</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> xd : <span class="number">1</span>;</span><br><span class="line">  &#125;;</span><br><span class="line">&#125; PDPTE;</span><br><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">union</span> <span class="title">PDE_</span></span></span><br><span class="line"><span class="class">&#123;</span></span><br><span class="line">  <span class="keyword">uint64_t</span> value;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span></span></span><br><span class="line"><span class="class">  &#123;</span></span><br><span class="line">    <span class="keyword">uint64_t</span> present : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> rw : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> user : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> write_through : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> cache_disable : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> accessed : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> dirty : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> page_size : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> ignored_2 : <span class="number">4</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> pt_p : <span class="number">40</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> ignored_3 : <span class="number">11</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> xd : <span class="number">1</span>;</span><br><span class="line">  &#125;;</span><br><span class="line">&#125; PDE;</span><br><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">union</span> <span class="title">PTE_</span></span></span><br><span class="line"><span class="class">&#123;</span></span><br><span class="line">  <span class="keyword">uint64_t</span> value;</span><br><span class="line">  VIRT_ADDR vaddr;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span></span></span><br><span class="line"><span class="class">  &#123;</span></span><br><span class="line">    <span class="keyword">uint64_t</span> present : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> rw : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> user : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> write_through : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> cache_disable : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> accessed : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> dirty : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> pat : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> global : <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> ignored_1 : <span class="number">3</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> page_frame : <span class="number">40</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> ignored_3 : <span class="number">11</span>;</span><br><span class="line">    <span class="keyword">uint64_t</span> xd : <span class="number">1</span>;</span><br><span class="line">  &#125;;</span><br><span class="line">&#125; PTE;</span><br><span class="line"><span class="meta">#<span class="meta-keyword">pragma</span> pack(pop)</span></span><br></pre></td></tr></table></figure>
+<p>如上所示，这是CPU翻译逻辑地址时会用到的结构，而这些众多的标志位则表明着这个逻辑地址的一些属性，在这些属性中，<code>user/supervisor</code>来决定这片内存是否能够被用户层访问。所以与人们想的不一样的是，cpu并非使用</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Va &gt;= <span class="number">0xFFFFFFFF80000000</span></span><br></pre></td></tr></table></figure>
+<p>来检查内存访问，而是使用</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Pte-&gt;user &amp; Pde-&gt;user &amp; Pdpte-&gt;user &amp; Pml4e-&gt;user</span><br></pre></td></tr></table></figure>
+<p>利用操作系统与cpu检测机制不一样这点，我们可以实现内存对所有用户层api不可见，但它又能够执行在用户模式上。操作非常简单：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">BOOL <span class="title">ExposeKernelMemoryToProcess</span><span class="params">( MemoryController&amp; Mc, PVOID Memory, SIZE_T Size, <span class="keyword">uint64_t</span> EProcess )</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">  Mc.AttachTo( EProcess );</span><br><span class="line">  BOOL Success = TRUE;</span><br><span class="line">  Mc.IterPhysRegion( Memory, Size, [ &amp; ] ( PVOID Va, <span class="keyword">uint64_t</span> Pa, SIZE_T Sz )</span><br><span class="line">  &#123;</span><br><span class="line">    <span class="keyword">auto</span> Info = Mc.QueryPageTableInfo( Va );</span><br><span class="line">    Info.Pml4e-&gt;user = TRUE;</span><br><span class="line">    Info.Pdpte-&gt;user = TRUE;</span><br><span class="line">    Info.Pde-&gt;user = TRUE;</span><br><span class="line">    <span class="keyword">if</span> ( !Info.Pde || ( Info.Pte &amp;&amp; ( !Info.Pte-&gt;present ) ) )</span><br><span class="line">    &#123;</span><br><span class="line">      Success= TRUE;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">else</span></span><br><span class="line">    &#123;</span><br><span class="line">      <span class="keyword">if</span> ( Info.Pte )</span><br><span class="line">        Info.Pte-&gt;user = TRUE;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125; );</span><br><span class="line">  Mc.Detach();</span><br><span class="line">  <span class="keyword">return</span> Success;</span><br><span class="line">&#125;</span><br><span class="line">PVOID Memory = AllocateKernelMemory( CpCtx, KrCtx, Size );</span><br><span class="line">ExposeKernelMemoryToProcess( Controller, Memory, Size, Controller.CurrentEProcess );</span><br><span class="line">ZeroMemory( Memory, Size );</span><br></pre></td></tr></table></figure>
+<p>看吧，现在我们有了一个秘密的内存页。</p>
+<h2 id="0x2-利用Copy-on-Write"><a href="#0x2-利用Copy-on-Write" class="headerlink" title="0x2:利用Copy-on-Write"></a>0x2:利用Copy-on-Write</h2><p>现在我们已经有了一片隐藏的内存了，最后我们需要做的只是让它跑起来。</p>
+<p>CoW 是操作系统为了节省内存，<strong>让进程共享某些物理内存，直到它的内存数据被改变的时候才重新映射的一种技术</strong>。</p>
+<p>我们知道ntdll.dll是每个进程都会加载的一个链接库，而它的代码段（.text）几乎不会改变，所以为什么要一次又一次地为成百上千个进程分配用于储存它的物理内存呢？</p>
+<p>实现非常简单</p>
+<ol>
+<li>如果一个PE文件在其他进程中被映射，并且它的虚拟地址在本进程中并未被使用，那么当本进程映射这个PE文件时，操作系统只会拷贝它的PFN到本进程，并设置这片内存属性为只读。</li>
+<li>如果有指令试图写入这片内存，将会产生一个PageFualt，这个时候操作系统将重新为这片内存分配物理地址空间，并移除只读属性。</li>
+</ol>
+<p>这意味着，当我们通过物理内存HOOK一个dll的时候，我们实际上是创建了一个<strong>系统范围有效</strong>的HOOK。</p>
+<p>我们选择HOOK一个常用的API：<code>TlsGetValue</code>。</p>
+<p>因为PML4E在各个进程间是不同的，因此我们不能直接跳转到我们的隐藏内存，我们可以在KERNEL32.DLL找到一片区域用于执行检查PID的代码：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">std</span>::<span class="built_in">vector</span>&lt;BYTE&gt; PidBasedHook =</span><br><span class="line">&#123;</span><br><span class="line">  <span class="number">0x65</span>, <span class="number">0x48</span>, <span class="number">0x8B</span>, <span class="number">0x04</span>, <span class="number">0x25</span>, <span class="number">0x30</span>, <span class="number">0x00</span>, <span class="number">0x00</span>, <span class="number">0x00</span>,        <span class="comment">// mov rax, gs:[0x30]</span></span><br><span class="line">  <span class="number">0x8B</span>, <span class="number">0x40</span>, <span class="number">0x40</span>,                                            <span class="comment">// mov eax,[rax+0x40] ; pid</span></span><br><span class="line">  <span class="number">0x3D</span>, <span class="number">0xDD</span>, <span class="number">0xCC</span>, <span class="number">0xAB</span>, <span class="number">0x0A</span>,                                <span class="comment">// cmp eax, TargetPid</span></span><br><span class="line">  <span class="number">0x0F</span>, <span class="number">0x85</span>, <span class="number">0x00</span>, <span class="number">0x00</span>, <span class="number">0x00</span>, <span class="number">0x00</span>,                          <span class="comment">// jne 0xAABBCC</span></span><br><span class="line">  <span class="number">0x48</span>, <span class="number">0xB8</span>, <span class="number">0xAA</span>, <span class="number">0xEE</span>, <span class="number">0xDD</span>, <span class="number">0xCC</span>, <span class="number">0xBB</span>, <span class="number">0xAA</span>, <span class="number">0x00</span>, <span class="number">0x00</span>,  <span class="comment">// mov rax, KernelMemory</span></span><br><span class="line">  <span class="number">0xFF</span>, <span class="number">0xE0</span>                                                   <span class="comment">// jmp rax</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+<p>因为PE始终是0x1000对齐的，所以找到一片35字节的可用区域非常简单。</p>
+<p>最后，添加上收尾代码，确保我们的HOOK只执行一次，并且在执行前恢复HOOK。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">std</span>::<span class="built_in">vector</span>&lt;BYTE&gt; Prologue =</span><br><span class="line">&#123; </span><br><span class="line">  <span class="number">0x00</span>, <span class="number">0x00</span>, <span class="comment">// data</span></span><br><span class="line">  <span class="number">0xF0</span>, <span class="number">0xFE</span>, <span class="number">0x05</span>, <span class="number">0xF8</span>, <span class="number">0xFF</span>, <span class="number">0xFF</span>, <span class="number">0xFF</span>,                     <span class="comment">// lock inc byte ptr [rip-n]</span></span><br><span class="line">                                                                <span class="comment">// wait_lock:</span></span><br><span class="line">  <span class="number">0x80</span>, <span class="number">0x3D</span>, <span class="number">0xF0</span>, <span class="number">0xFF</span>, <span class="number">0xFF</span>, <span class="number">0xFF</span>, <span class="number">0x00</span>,                     <span class="comment">// cmp byte ptr [rip-m], 0x0</span></span><br><span class="line">  <span class="number">0xF3</span>, <span class="number">0x90</span>,                                                   <span class="comment">// pause</span></span><br><span class="line">  <span class="number">0x74</span>, <span class="number">0xF5</span>,                                                   <span class="comment">// je wait_lock</span></span><br><span class="line">  <span class="number">0x48</span>, <span class="number">0xB8</span>, <span class="number">0xAA</span>, <span class="number">0xEE</span>, <span class="number">0xDD</span>, <span class="number">0xCC</span>, <span class="number">0xBB</span>, <span class="number">0xAA</span>, <span class="number">0x00</span>, <span class="number">0x00</span>,   <span class="comment">// mov rax, 0xAABBCCDDEEAA</span></span><br><span class="line">                                                                <span class="comment">// data_sync_lock:</span></span><br><span class="line">  <span class="number">0x0F</span>, <span class="number">0x0D</span>, <span class="number">0x08</span>,                                             <span class="comment">// prefetchw [rax]</span></span><br><span class="line">  <span class="number">0x81</span>, <span class="number">0x38</span>, <span class="number">0xDD</span>, <span class="number">0xCC</span>, <span class="number">0xBB</span>, <span class="number">0xAA</span>,                           <span class="comment">// cmp dword ptr[rax], 0xAABBCCDD</span></span><br><span class="line">  <span class="number">0xF3</span>, <span class="number">0x90</span>,                                                   <span class="comment">// pause</span></span><br><span class="line">  <span class="number">0x75</span>, <span class="number">0xF3</span>,                                                   <span class="comment">// jne data_sync_lock</span></span><br><span class="line">  <span class="number">0xF0</span>, <span class="number">0xFE</span>, <span class="number">0x0D</span>, <span class="number">0xCF</span>, <span class="number">0xFF</span>, <span class="number">0xFF</span>, <span class="number">0xFF</span>,                     <span class="comment">// lock dec byte ptr [rip-n]</span></span><br><span class="line">  <span class="number">0x75</span>, <span class="number">0x41</span>,                                                   <span class="comment">// jnz continue_exec                         </span></span><br><span class="line">  <span class="number">0x53</span>,                                                         <span class="comment">// --- start executing DllMain ---</span></span><br></pre></td></tr></table></figure>
+<p>至此，所有的工作都完成了。我们成功注入了并隐藏了dll。通过一个系统范围有效的HOOK来确保在目标进程执行前驱动程序就可以卸载。</p>
+<p><a target="_blank" rel="noopener" href="https://github.com/can1357/ThePerfectInjector">源码</a></p>
+<p><em>省略了一些细枝末节，此文核心是PTE欺骗，至于后面通过COW劫持线程，个人认为实用性不大。</em></p>
+
+      
+    </div>
+    <footer class="article-footer">
+      <a data-url="http://example.com/2020/05/02/The-Perfect-Injector/" data-id="ckle1kt2f00071ou66zus4u3a" data-title="[部分翻译] 通过 PTE 欺骗以达到近乎完美的注入效果" class="article-share-link">Share</a>
+      
+      
+      
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/%E5%86%85%E6%A0%B8/" rel="tag">内核</a></li><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/%E8%AF%91/" rel="tag">译</a></li></ul>
+
+    </footer>
+  </div>
+  
+    
+<nav id="article-nav">
+  
+    <a href="/2020/05/08/Inside-Windows-Page-Frame-Number(PFN)%E2%80%93Part1/" id="article-nav-newer" class="article-nav-link-wrap">
+      <strong class="article-nav-caption">Newer</strong>
+      <div class="article-nav-title">
+        
+          [Repost] Inside Windows Page Frame Number (PFN) – Part 1
+        
+      </div>
+    </a>
+  
+  
+    <a href="/2020/05/02/randomized-pte-base/" id="article-nav-older" class="article-nav-link-wrap">
+      <strong class="article-nav-caption">Older</strong>
+      <div class="article-nav-title">关于定位随机化的pte base</div>
+    </a>
+  
+</nav>
+
+  
+</article>
+
+
+</section>
+        
+          <aside id="sidebar">
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Categories</h3>
+    <div class="widget">
+      <ul class="category-list"><li class="category-list-item"><a class="category-list-link" href="/categories/Win%E5%86%85%E6%A0%B8/">Win内核</a></li></ul>
+    </div>
+  </div>
+
+
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Tags</h3>
+    <div class="widget">
+      <ul class="tag-list" itemprop="keywords"><li class="tag-list-item"><a class="tag-list-link" href="/tags/%E5%86%85%E6%A0%B8/" rel="tag">内核</a></li><li class="tag-list-item"><a class="tag-list-link" href="/tags/%E5%A4%87%E5%BF%98%E5%BD%95/" rel="tag">备忘录</a></li><li class="tag-list-item"><a class="tag-list-link" href="/tags/%E8%8B%B1/" rel="tag">英</a></li><li class="tag-list-item"><a class="tag-list-link" href="/tags/%E8%AF%91/" rel="tag">译</a></li></ul>
+    </div>
+  </div>
+
+
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Tag Cloud</h3>
+    <div class="widget tagcloud">
+      <a href="/tags/%E5%86%85%E6%A0%B8/" style="font-size: 20px;">内核</a> <a href="/tags/%E5%A4%87%E5%BF%98%E5%BD%95/" style="font-size: 10px;">备忘录</a> <a href="/tags/%E8%8B%B1/" style="font-size: 10px;">英</a> <a href="/tags/%E8%AF%91/" style="font-size: 10px;">译</a>
+    </div>
+  </div>
+
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Archives</h3>
+    <div class="widget">
+      <ul class="archive-list"><li class="archive-list-item"><a class="archive-list-link" href="/archives/2020/05/">May 2020</a></li></ul>
+    </div>
+  </div>
+
+
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Recent Posts</h3>
+    <div class="widget">
+      <ul>
+        
+          <li>
+            <a href="/2020/05/08/Inside-Windows-Page-Frame-Number(PFN)%E2%80%93Part1/">[Repost] Inside Windows Page Frame Number (PFN) – Part 1</a>
+          </li>
+        
+          <li>
+            <a href="/2020/05/02/The-Perfect-Injector/">[部分翻译] 通过 PTE 欺骗以达到近乎完美的注入效果</a>
+          </li>
+        
+          <li>
+            <a href="/2020/05/02/randomized-pte-base/">关于定位随机化的pte base</a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+
+  
+</aside>
+        
+      </div>
+      <footer id="footer">
+  
+  <div class="outer">
+    <div id="footer-info" class="inner">
+      
+      &copy; 2021 John Doe<br>
+      Powered by <a href="https://hexo.io/" target="_blank">Hexo</a>
+    </div>
+  </div>
+</footer>
+
+    </div>
+    <nav id="mobile-nav">
+  
+    <a href="/" class="mobile-nav-link">Home</a>
+  
+    <a href="/archives" class="mobile-nav-link">Archives</a>
+  
+</nav>
+    
+
+
+<script src="/js/jquery-3.4.1.min.js"></script>
+
+
+
+  
+<script src="/fancybox/jquery.fancybox.min.js"></script>
+
+
+
+
+<script src="/js/script.js"></script>
+
+
+
+
+
+  </div>
+</body>
+</html>

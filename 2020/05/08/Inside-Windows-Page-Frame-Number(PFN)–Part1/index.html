@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  
+  
+  <title>[Repost] Inside Windows Page Frame Number (PFN) – Part 1 | Hexo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <meta name="description" content="Inside Windows Page Frame Number (PFN) – Part 1 Introduction (Page Frame Number)Windows and almost all the OSs use Page Frame Number Database in order to have a track of virtually allocated pages to k">
+<meta property="og:type" content="article">
+<meta property="og:title" content="[Repost] Inside Windows Page Frame Number (PFN) – Part 1">
+<meta property="og:url" content="http://example.com/2020/05/08/Inside-Windows-Page-Frame-Number(PFN)%E2%80%93Part1/index.html">
+<meta property="og:site_name" content="Hexo">
+<meta property="og:description" content="Inside Windows Page Frame Number (PFN) – Part 1 Introduction (Page Frame Number)Windows and almost all the OSs use Page Frame Number Database in order to have a track of virtually allocated pages to k">
+<meta property="og:locale" content="en_US">
+<meta property="og:image" content="http://example.com/images/pfn.gif">
+<meta property="og:image" content="http://example.com/images/zero-thread.png">
+<meta property="og:image" content="http://example.com/images/kernel.png">
+<meta property="article:published_time" content="2020-05-08T12:17:00.000Z">
+<meta property="article:modified_time" content="2020-05-08T12:35:25.875Z">
+<meta property="article:author" content="John Doe">
+<meta property="article:tag" content="内核">
+<meta property="article:tag" content="英">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/images/pfn.gif">
+  
+    <link rel="alternate" href="/atom.xml" title="Hexo" type="application/atom+xml">
+  
+  
+    <link rel="shortcut icon" href="/favicon.png">
+  
+  
+    
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/typeface-source-code-pro@0.0.71/index.min.css">
+
+  
+  
+<link rel="stylesheet" href="/css/style.css">
+
+  
+    
+<link rel="stylesheet" href="/fancybox/jquery.fancybox.min.css">
+
+  
+<meta name="generator" content="Hexo 5.3.0"></head>
+
+<body>
+  <div id="container">
+    <div id="wrap">
+      <header id="header">
+  <div id="banner"></div>
+  <div id="header-outer" class="outer">
+    <div id="header-title" class="inner">
+      <h1 id="logo-wrap">
+        <a href="/" id="logo">Hexo</a>
+      </h1>
+      
+    </div>
+    <div id="header-inner" class="inner">
+      <nav id="main-nav">
+        <a id="main-nav-toggle" class="nav-icon"></a>
+        
+          <a class="main-nav-link" href="/">Home</a>
+        
+          <a class="main-nav-link" href="/archives">Archives</a>
+        
+      </nav>
+      <nav id="sub-nav">
+        
+          <a id="nav-rss-link" class="nav-icon" href="/atom.xml" title="RSS Feed"></a>
+        
+        <a id="nav-search-btn" class="nav-icon" title="Search"></a>
+      </nav>
+      <div id="search-form-wrap">
+        <form action="//google.com/search" method="get" accept-charset="UTF-8" class="search-form"><input type="search" name="q" class="search-form-input" placeholder="Search"><button type="submit" class="search-form-submit">&#xF002;</button><input type="hidden" name="sitesearch" value="http://example.com"></form>
+      </div>
+    </div>
+  </div>
+</header>
+
+      <div class="outer">
+        <section id="main"><article id="post-Inside-Windows-Page-Frame-Number(PFN)–Part1" class="h-entry article article-type-post" itemprop="blogPost" itemscope itemtype="https://schema.org/BlogPosting">
+  <div class="article-meta">
+    <a href="/2020/05/08/Inside-Windows-Page-Frame-Number(PFN)%E2%80%93Part1/" class="article-date">
+  <time class="dt-published" datetime="2020-05-08T12:17:00.000Z" itemprop="datePublished">2020-05-08</time>
+</a>
+    
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Win%E5%86%85%E6%A0%B8/">Win内核</a>
+  </div>
+
+  </div>
+  <div class="article-inner">
+    
+    
+      <header class="article-header">
+        
+  
+    <h1 class="p-name article-title" itemprop="headline name">
+      [Repost] Inside Windows Page Frame Number (PFN) – Part 1
+    </h1>
+  
+
+      </header>
+    
+    <div class="e-content article-entry" itemprop="articleBody">
+      
+        <p><a target="_blank" rel="noopener" href="https://binvoke.com/inside-windows-page-frame-number-part1/">Inside Windows Page Frame Number (PFN) – Part 1</a></p>
+<h2 id="Introduction-Page-Frame-Number"><a href="#Introduction-Page-Frame-Number" class="headerlink" title="Introduction (Page Frame Number)"></a>Introduction (Page Frame Number)</h2><p>Windows and almost all the OSs use Page Frame Number Database in order to have a track of virtually allocated pages to know which page must be freed or evicted or if a page needs to be cached and etc. All of these kinds of stuff manages through a list, called Page Frame Number (PFN). A long list of explanation about the states of every physically and virtually allocated pages and its corresponding attributes. In the rest of this post, I’ll explain Windows implementation of Page Frame Number with lots of practical examples, the following part describes basic concepts implementations, you should also read the next part in order to see how you can use or change these attributes. If you’re familiar with non-PAE mode and PAE mode systems then I should note that in a non-PAE mode every PFN structure takes 24 bytes while in a PAE mode system this size increases to 28 so if your pages are 4096 bytes then allocates about 24 bytes more to keep tracks of every page. As you can see here:</p>
+<blockquote>
+<p>In non-PAE mode 24 bytes in the PFN database represents each 4 KB page of physical memory – this is a ratio of 170:1. In PAE mode 28 bytes represents each 4 KB page of physical memory – this is a ratio of 146:1. This means that roughly 6 MB or 7 MB is needed in the PFN database to describe each 1 GB of physical memory. This might not sound like much, but if you have a 32-bit system with 16 GB of physical memory, then it requires about 112 MB of the 2 GB of kernel virtual address space just to address the RAM. This is another reason why systems with 16 GB of physical memory or more will not allow the 3GB mode (also known as IncreaseUserVA) which increases the user virtual address space to 3 GB and decreases the kernel virtual address space to 1 GB on 32-bit systems.</p>
+</blockquote>
+<p>One of the benefits of having extended pages (e.g 2MB for every page) is that it needs lower amounts of MMPFN. Before start getting deep into the PFN, please remember the term “Page” is mostly used in the operating system level concepts whereas “Frame” is used in CPU Level concepts, therefore “Page” means virtual page and “Page Frame” means physical page.</p>
+<h2 id="PFN-Lists"><a href="#PFN-Lists" class="headerlink" title="PFN Lists"></a>PFN Lists</h2><p>The Page Frame Number consists of lists that describe the state of some pages, there are Active Lists which shows an active page (e.g in working sets or etc), Standby List which means a list that previously backed in the disk and the page itself can be emptied and reused without incurring a disk IO, Modified List which shows that the page is previously modified and somehow must be written to the disk, Freed List, as the name describes, it shows a page that is no longer needed to be maintained and can be freed and finally Zero List that describes a page that is free and has all zeroes (0) in it. A great picture derived from here which shows how the PFN database lists are related to each other :</p>
+<p><img src="/images/pfn.gif"></p>
+<p>These lists are used to manage memory in “page faults” state in the way that everytime a “page fault” occurs, Windows tries to find an available page form, Zero List, if the list is empty then it gets one from Freed List and zeroes the page and use it, on the other hand, if the Freed List is also empty then it goes to the Standby List and zeroes that page.</p>
+<h2 id="The-Zero-Page-Thread"><a href="#The-Zero-Page-Thread" class="headerlink" title="The Zero Page Thread"></a>The Zero Page Thread</h2><p>In Windows, there is a thread with the priority of 0 which is responsible for zeroing memory when system is idle and is the only thread in the entire system that runs at priority 0. (which is the lowest available priority because the user threads are at least 1). This thread clears the Freed List whenever is possible. Also, there is a function in Windows called RtlSecureZeroMemory() which frees a location securely but in the kernel perspective nt!KeZeroPages is responsible for freeing the pages. The following picture shows the behavior of zero-thread:</p>
+<p><img src="/images/zero-thread.png"></p>
+<p>Let’s find the Zero Thread! We know that it comes from system process, its priority is 0, this should be enough and nothing more is needed. First try to find System‘s nt!_eprocess:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">!process 0 System</span><br></pre></td></tr></table></figure>
+<p>Now we can see the System‘s threads, the details of our target thread (zero-thread) are:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">THREAD ffffd4056ed00040  Cid 0004.0040  Teb: 0000000000000000 Win32Thread: 0000000000000000 WAIT: (WrFreePage) KernelMode Non-Alertable</span><br><span class="line">    fffff8034637f148  NotificationEvent</span><br><span class="line">    fffff80346380480  NotificationEvent</span><br><span class="line">Not impersonating</span><br><span class="line">DeviceMap                 ffff99832ae1b010</span><br><span class="line">Owning Process            ffffd4056ec56040       Image:         System</span><br><span class="line">Attached Process          N&#x2F;A            Image:         N&#x2F;A</span><br><span class="line">Wait Start TickCount      4910           Ticks: 4 (0:00:00:00.062)</span><br><span class="line">Context Switch Count      21023          IdealProcessor: 3</span><br><span class="line">UserTime                  00:00:00.000</span><br><span class="line">KernelTime                00:00:01.109</span><br><span class="line">Win32 Start Address nt!MiZeroPageThread (0xfffff80346144ed0)</span><br><span class="line">Stack Init ffffe700b7c14c90 Current ffffe700b7c14570</span><br><span class="line">Base ffffe700b7c15000 Limit ffffe700b7c0f000 Call 0000000000000000</span><br><span class="line">Priority 0 BasePriority 0 PriorityDecrement 0 IoPriority 2 PagePriority 5</span><br><span class="line">Child-SP          RetAddr           Call Site</span><br><span class="line">ffffe700&#96;b7c145b0 fffff803&#96;46016f8a nt!KiSwapContext+0x76</span><br><span class="line">ffffe700&#96;b7c146f0 fffff803&#96;46016951 nt!KiSwapThread+0x16a</span><br><span class="line">ffffe700&#96;b7c147a0 fffff803&#96;46014ba7 nt!KiCommitThreadWait+0x101</span><br><span class="line">ffffe700&#96;b7c14840 fffff803&#96;461450b7 nt!KeWaitForMultipleObjects+0x217</span><br><span class="line">ffffe700&#96;b7c14920 fffff803&#96;460bba37 nt!MiZeroPageThread+0x1e7</span><br><span class="line">ffffe700&#96;b7c14c10 fffff803&#96;46173456 nt!PspSystemThreadStartup+0x47</span><br><span class="line">ffffe700&#96;b7c14c60 00000000&#96;00000000 nt!KiStartSystemThread+0x16</span><br></pre></td></tr></table></figure>
+<p>As you can see, its start address is at nt!MiZeroPageThread and its priority-level is 0 and if we see the call-stack then we can see nt!MiZeroPageThread was called previously. For more information please visit <a target="_blank" rel="noopener" href="https://randomascii.wordpress.com/2014/12/10/hidden-costs-of-memory-allocation/">Hidden Costs of Memory Allocation</a>.</p>
+<h2 id="nt-MMPFN"><a href="#nt-MMPFN" class="headerlink" title="nt!_MMPFN"></a>nt!_MMPFN</h2><p>The Windows structure for PFN is nt!_MMPFN which you can see below :</p>
+<p><img src="/images/kernel.png"></p>
+<p>As you see, _MMPFN takes 28 bytes. PFN records are stored in the memory based on their physical address order which means you can always calculate the physical address with the help of PFN.</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Physical Address &#x3D; PFN * page size(e.g 4096 Byte) + offset</span><br></pre></td></tr></table></figure>
+<p>The address of the PFN database is located at <em>nt!MmPfnDatabase</em>, you can use the following example to get your PFN database address in Windbg.</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">2: kd&gt; x nt!MmPfnDatabase</span><br><span class="line">fffff800&#96;a2a76048 nt!MmPfnDatabase &#x3D; &lt;no type information&gt;</span><br></pre></td></tr></table></figure>
+<h2 id="memusage"><a href="#memusage" class="headerlink" title="!memusage"></a>!memusage</h2><p>Another very useful command in windbg is !memusage, this command gives almost everything about PFN and pages in your memory layout and its corresponding details (e.g files, fonts, system drivers, DLL modules, executable files including their names and their paging bits modifications). A brief sample of this command is shown below :</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br></pre></td><td class="code"><pre><span class="line">2: kd&gt; !memusage</span><br><span class="line"> loading PFN database</span><br><span class="line">loading (100% complete)</span><br><span class="line">Compiling memory usage data (99% Complete).</span><br><span class="line">             Zeroed:     9841 (   39364 kb)</span><br><span class="line">               Free:   113298 (  453192 kb)</span><br><span class="line">            Standby:   105520 (  422080 kb)</span><br><span class="line">           Modified:     7923 (   31692 kb)</span><br><span class="line">    ModifiedNoWrite:        0 (       0 kb)</span><br><span class="line">       Active&#x2F;Valid:   286963 ( 1147852 kb)</span><br><span class="line">         Transition:       45 (     180 kb)</span><br><span class="line">          SLIST&#x2F;Bad:      567 (    2268 kb)</span><br><span class="line">            Unknown:        0 (       0 kb)</span><br><span class="line">              TOTAL:   524157 ( 2096628 kb)</span><br><span class="line">Dangling Yes Commit:      140 (     560 kb)</span><br><span class="line"> Dangling No Commit:    37589 (  150356 kb)</span><br><span class="line">  Building kernel map</span><br><span class="line">  Finished building kernel map</span><br><span class="line"> (Master1 0 for 80)</span><br><span class="line"> (Master1 0 for 580)</span><br><span class="line"> (Master1 0 for 800)</span><br><span class="line"> (Master1 0 for 980)</span><br><span class="line">Scanning PFN database - (97% complete)</span><br><span class="line"> (Master1 0 for 7d100)</span><br><span class="line">Scanning PFN database - (100% complete)</span><br><span class="line">  Usage Summary (in Kb):</span><br><span class="line">Control       Valid Standby Dirty Shared Locked PageTables  name</span><br><span class="line">ffffffffd 11288      0     0     0 11288     0    AWE</span><br><span class="line">ffffd4056ec4c460     0    112     0     0     0     0  mapped_file( LeelUIsl.ttf )</span><br><span class="line">ffffd4056ec4c8f0     0    160     0     0     0     0  mapped_file( malgun.ttf )</span><br><span class="line">ffffd4056ec4d6b0     0    108     0     0     0     0  mapped_file( framd.ttf )</span><br><span class="line">.....</span><br><span class="line">ffffd4057034ecd0   328    148     0     0     0     0  mapped_file( usbport.sys )</span><br><span class="line">ffffd4057034f0e0    48     28     0     0     0     0  mapped_file( mouclass.sys )</span><br><span class="line">ffffd4057034f7d0    32     28     0     0     0     0  mapped_file( serenum.sys )</span><br><span class="line">ffffd405703521a0     0     20     0     0     0     0  mapped_file( swenum.sys )</span><br><span class="line">.....</span><br><span class="line">--------     0     20     0 ----- -----     0  session 0 0</span><br><span class="line">--------     4      0     0 ----- -----     0  session 0 ffffe700b8b45000</span><br><span class="line">--------     4      0     0 ----- -----     0  session 1 ffffe700b8ead000</span><br><span class="line">--------  32520      0    84 ----- -----  1324  process ( System ) ffffd4056ec56040</span><br><span class="line">--------  2676      0     0 ----- -----   304  process ( msdtc.exe ) ffffd405717567c0</span><br><span class="line">--------  4444      0     0 ----- -----   368  process ( WmiPrvSE.exe ) ffffd405718057c0</span><br><span class="line">--------  37756      0    60 ----- -----  1028  process ( SearchUI.exe ) ffffd405718e87c0</span><br><span class="line">.....</span><br><span class="line">--------     8      0     0 -----     0 -----  driver ( condrv.sys )</span><br><span class="line">--------     8      0     0 -----     0 -----  driver ( WdNisDrv.sys )</span><br><span class="line">--------    52      0     0 -----     0 -----  driver ( peauth.sys )</span><br><span class="line">--------  24744      0     0 -----     0 -----         ( PFN Database )</span><br><span class="line">Summary   1147852  422260 31692 129996 204428 25156  Total</span><br><span class="line">.....</span><br><span class="line">    b45b    64      0     0    60     0     0   Page File Section</span><br><span class="line">    b56b     4      0     0     4     0     0   Page File Section</span><br><span class="line">    b7ec    84      0     0    64     0     0   Page File Section</span><br><span class="line">    b905    12      0     0     0     0     0   Page File Section</span><br><span class="line">    bf5c     4      0     0     0     0     0   Page File Section</span><br><span class="line">.....</span><br></pre></td></tr></table></figure>
+<p>Note that !memusage takes a long time to finish its probes. What if you want to know more about these pages? The Windbg help document mentioned :</p>
+<blockquote>
+<h2 id="Remarks"><a href="#Remarks" class="headerlink" title="Remarks"></a>Remarks</h2><p>You can use the !vm extension command to analyze virtual memory use. This extension is typically more useful than !memusage. For more information about memory management, see Microsoft Windows Internals, by Mark Russinovich and David Solomon. (This book may not be available in some languages and countries.) The !pfn extension command can be used to display a particular page frame entry in the PFN database.</p>
+</blockquote>
+<p>Now we want survey among these command in a more detailed perspective. That’s enough for now… I try to make another part that describes the PFN more practically, so make sure to check the blog more frequently.</p>
+<p>This Post is written in cooperation with my friend Sina.</p>
+<h2 id="References"><a href="#References" class="headerlink" title="References"></a>References</h2><ul>
+<li>[Getting Physical: Extreme abuse of Intel-based Paging Systems – Part 2 – Windows] (<a target="_blank" rel="noopener" href="https://www.coresecurity.com/blog/getting-physical-extreme-abuse-of-intel-based-paging-systems-part-2-windows">https://www.coresecurity.com/blog/getting-physical-extreme-abuse-of-intel-based-paging-systems-part-2-windows</a>)</li>
+<li>[Page Frame Number (PFN) database] (<a target="_blank" rel="noopener" href="https://social.technet.microsoft.com/wiki/contents/articles/15259.page-frame-number-pfn-database.aspx">https://social.technet.microsoft.com/wiki/contents/articles/15259.page-frame-number-pfn-database.aspx</a>)</li>
+<li>[Exploring Windows virtual memory management] (<a target="_blank" rel="noopener" href="https://www.triplefault.io/2017/08/exploring-windows-virtual-memory.html">https://www.triplefault.io/2017/08/exploring-windows-virtual-memory.html</a>)</li>
+<li>[Page Frame Number Database] (<a target="_blank" rel="noopener" href="https://flylib.com/books/en/4.491.1.69/1/">https://flylib.com/books/en/4.491.1.69/1/</a>)</li>
+<li>[PDC10: Mysteries of Windows Memory Management Revealed: Part Two] (<a target="_blank" rel="noopener" href="https://blogs.msdn.microsoft.com/tims/2010/10/29/pdc10-mysteries-of-windows-memory-management-revealed-part-two/">https://blogs.msdn.microsoft.com/tims/2010/10/29/pdc10-mysteries-of-windows-memory-management-revealed-part-two/</a>)</li>
+</ul>
+
+      
+    </div>
+    <footer class="article-footer">
+      <a data-url="http://example.com/2020/05/08/Inside-Windows-Page-Frame-Number(PFN)%E2%80%93Part1/" data-id="ckle1kt2500001ou6fnuue4ef" data-title="[Repost] Inside Windows Page Frame Number (PFN) – Part 1" class="article-share-link">Share</a>
+      
+      
+      
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/%E5%86%85%E6%A0%B8/" rel="tag">内核</a></li><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/%E8%8B%B1/" rel="tag">英</a></li></ul>
+
+    </footer>
+  </div>
+  
+    
+<nav id="article-nav">
+  
+  
+    <a href="/2020/05/02/The-Perfect-Injector/" id="article-nav-older" class="article-nav-link-wrap">
+      <strong class="article-nav-caption">Older</strong>
+      <div class="article-nav-title">[部分翻译] 通过 PTE 欺骗以达到近乎完美的注入效果</div>
+    </a>
+  
+</nav>
+
+  
+</article>
+
+
+</section>
+        
+          <aside id="sidebar">
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Categories</h3>
+    <div class="widget">
+      <ul class="category-list"><li class="category-list-item"><a class="category-list-link" href="/categories/Win%E5%86%85%E6%A0%B8/">Win内核</a></li></ul>
+    </div>
+  </div>
+
+
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Tags</h3>
+    <div class="widget">
+      <ul class="tag-list" itemprop="keywords"><li class="tag-list-item"><a class="tag-list-link" href="/tags/%E5%86%85%E6%A0%B8/" rel="tag">内核</a></li><li class="tag-list-item"><a class="tag-list-link" href="/tags/%E5%A4%87%E5%BF%98%E5%BD%95/" rel="tag">备忘录</a></li><li class="tag-list-item"><a class="tag-list-link" href="/tags/%E8%8B%B1/" rel="tag">英</a></li><li class="tag-list-item"><a class="tag-list-link" href="/tags/%E8%AF%91/" rel="tag">译</a></li></ul>
+    </div>
+  </div>
+
+
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Tag Cloud</h3>
+    <div class="widget tagcloud">
+      <a href="/tags/%E5%86%85%E6%A0%B8/" style="font-size: 20px;">内核</a> <a href="/tags/%E5%A4%87%E5%BF%98%E5%BD%95/" style="font-size: 10px;">备忘录</a> <a href="/tags/%E8%8B%B1/" style="font-size: 10px;">英</a> <a href="/tags/%E8%AF%91/" style="font-size: 10px;">译</a>
+    </div>
+  </div>
+
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Archives</h3>
+    <div class="widget">
+      <ul class="archive-list"><li class="archive-list-item"><a class="archive-list-link" href="/archives/2020/05/">May 2020</a></li></ul>
+    </div>
+  </div>
+
+
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Recent Posts</h3>
+    <div class="widget">
+      <ul>
+        
+          <li>
+            <a href="/2020/05/08/Inside-Windows-Page-Frame-Number(PFN)%E2%80%93Part1/">[Repost] Inside Windows Page Frame Number (PFN) – Part 1</a>
+          </li>
+        
+          <li>
+            <a href="/2020/05/02/The-Perfect-Injector/">[部分翻译] 通过 PTE 欺骗以达到近乎完美的注入效果</a>
+          </li>
+        
+          <li>
+            <a href="/2020/05/02/randomized-pte-base/">关于定位随机化的pte base</a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+
+  
+</aside>
+        
+      </div>
+      <footer id="footer">
+  
+  <div class="outer">
+    <div id="footer-info" class="inner">
+      
+      &copy; 2021 John Doe<br>
+      Powered by <a href="https://hexo.io/" target="_blank">Hexo</a>
+    </div>
+  </div>
+</footer>
+
+    </div>
+    <nav id="mobile-nav">
+  
+    <a href="/" class="mobile-nav-link">Home</a>
+  
+    <a href="/archives" class="mobile-nav-link">Archives</a>
+  
+</nav>
+    
+
+
+<script src="/js/jquery-3.4.1.min.js"></script>
+
+
+
+  
+<script src="/fancybox/jquery.fancybox.min.js"></script>
+
+
+
+
+<script src="/js/script.js"></script>
+
+
+
+
+
+  </div>
+</body>
+</html>
